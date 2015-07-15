@@ -50,8 +50,6 @@ cycleCountEntry::cycleCountEntry() :
 	totalCyclesFastPath=0;
 	invocationCountTriedOneLineCache=0;
 	invocationCountOneLineCache=0;
-	rdtsc_start = 0;
-	rdtsc_stop = 0;
 #endif
 }
 
@@ -66,24 +64,6 @@ cycleCountEntry::~cycleCountEntry()
 }
 
 #ifdef FPDEBUG
-inline void logInvocationTriedOneLine(cycleCountEntry* cl ) {
-	if ( cl != nullptr ) ++(cl->invocationCountTriedOneLineCache);
-}
-inline void logInvocationOneLine( cycleCountEntry* cl ) {
-	if ( cl != nullptr ) ++(cl->invocationCountOneLineCache);
-}
-inline void logHit(cycleCountEntry* cl) {
-	if ( cl != nullptr ) ++(cl->cacheHitCount);
-}
-inline void logInvocationCountFastPath( cycleCountEntry* cl )
-{
-	if ( cl != nullptr ) ++(cl->invocationCountFastPath);
-}
-inline void logInvocationCountSlowPAth( cycleCountEntry* cl)
-{
-	if ( cl != nullptr ) ++(cl->invocationCountSlowPath);
-}
-
 namespace {
 	static inline unsigned long long rdtsc() {
 		unsigned hi=0,lo=0;
@@ -93,72 +73,26 @@ namespace {
 		return ((unsigned long long)lo) | ((unsigned long long)hi<<32 );
 	}
 }
-inline void logStartCountCycles(cycleCountEntry* cl)
+void G4FastPathHadronicCrossSection::logStartCountCycles(timing& tm)
 {
-	if ( cl != nullptr ) cl->rdtsc_start = rdtsc();
+	tm.rdtsc_start=rdtsc();
 }
-inline void logStopCountCycles(cycleCountEntry* cl)
+void G4FastPathHadronicCrossSection::logStopCountCycles(timing& tm)
 {
-	if ( cl != nullptr ) cl->rdtsc_stop = rdtsc();
+	tm.rdtsc_stop=rdtsc();
 }
-inline void logInitCyclesFastPath(cycleCountEntry* cl)
-{
-	if ( cl != nullptr ) cl->initCyclesFastPath = cl->rdtsc_stop - cl->rdtsc_start;
-}
-inline void logTotalCyclesFastPath( cycleCountEntry* cl)
-{
-	if ( cl!=nullptr ) cl->totalCyclesFastPath = cl->rdtsc_stop - cl->rdtsc_start;
-}
-inline void logTotalCyclesSlowPath( cycleCountEntry* cl)
-{
-	if ( cl!=nullptr ) cl->totalCyclesSlowPath = cl->rdtsc_stop - cl->rdtsc_start;
-}
-
-
 #else
-inline void logInvocationTriedOneLine(cycleCountEntry*){}
-inline void logInvocationOneLine( cycleCountEntry*){}
-inline void logHit(cycleCountEntry*){}
-inline void logInvocationCountFastPath( cycleCountEntry*){}
-inline void logInvocationCountSlowPAth( cycleCountEntry*){}
-inline void logStartCountCycles( cycleCountEntry* ) {}
-inline void logStopCountCycles( cycleCountEntry* ) {}
-inline void logInitCyclesFastPath(cycleCountEntry* ) {}
-inline void logTotalCyclesFastPath( cycleCountEntry* ) {}
-inline void logTotalCyclesSlowPath( cycleCountEntry* ) {}
-inline void logCrossSectionCountMethodCalled( getCrossSectionCount& ) {}
+void logStartCountCycles(timing&) {}
+void logStopCountCycles(timing&) {}
 #endif
-
 getCrossSectionCount::getCrossSectionCount() {
 #ifdef FPDEBUG
 	methodCalled = 0;
 	hitOneLineCache=0;
 	fastPath=0;
 	slowPath=0;
+	sampleZandA = 0;
 #endif
 }
 
-inline void getCrossSectionCount::MethodCalled() {
-#ifdef FPDEBUG
-	++methodCalled;
-#endif
-}
-
-inline void getCrossSectionCount::HitOneLine() {
-#ifdef FPDEBUG
-	++hitOneLineCache;
-#endif
-}
-
-inline void getCrossSectionCount::FastPath() {
-#ifdef FPDEBUG
-	++fastPath;
-#endif
-}
-
-inline void getCrossSectionCount::SlowPath() {
-#ifdef FPDEBUG
-	++slowPath;
-#endif
-}
 

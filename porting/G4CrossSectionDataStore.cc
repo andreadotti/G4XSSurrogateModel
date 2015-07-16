@@ -103,7 +103,9 @@ G4CrossSectionDataStore::GetCrossSection(const G4DynamicParticle* part,
 		entry = fastPathCache[searchkey];
 	}
 
-
+	//Initialization phase: building cache, force slow path
+	if ( fastPathFlags.initializationPhase && fastPathFlags.useFastPathIfAvailable )
+	{ requiresSlowPath = true; }
 
   //Super fast check: are we calling again this method with exactly the same interaction?
   if(mat == currentMaterial && part->GetDefinition() == matParticle
@@ -160,7 +162,7 @@ G4CrossSectionDataStore::GetCrossSection(const G4DynamicParticle* part,
 
   if ( !requiresSlowPath && fast_entry != nullptr ) {
 	  counters.FastPath();
-	  //matCrossSection = GetCrossSectionFastPath( fast_entry , part );//TODO: implement
+	  matCrossSection = GetCrossSectionFastPath( fast_entry , part );//TODO: implement
 	  fastPathFlags.prevCalcUsedFastPath=true;
   } else {
 	  counters.SlowPath();
@@ -184,27 +186,14 @@ G4CrossSectionDataStore::GetCrossSection(const G4DynamicParticle* part,
 
   //TODO: Stuff missing here to understand what we actually have to do,
   //I think it is the initialization and building of the fast path
+#warning Need to implement this part
 
   //Some logging of timing
-#ifdef FPDEBUG
-  if (fast_entry != nullptr ) {
-	  if ( entry->invocationCountFastPath == 0 ) {
-		  //PRUTH style initialization
-		  G4FastPathHadronicCrossSection::logInitCyclesFastPath(entry,timing);
-		  G4FastPathHadronicCrossSection::logInvocationCountFastPath(entry);
-	  } else {
-		  //PRUTH comment to understand:
-		  //the first one includes the initialization... don't count it for now
-		  G4FastPathHadronicCrossSection::logTotalCyclesFastPath(entry,timing);
-		  G4FastPathHadronicCrossSection::logInvocationCountFastPath(entry);
-	  }
-  } else {
-	  G4FastPathHadronicCrossSection::logInvocationCountSlowPAth(entry);
-	  G4FastPathHadronicCrossSection::logTotalCyclesSlowPath(entry,timing);
-  }
-#endif
+  G4FastPathHadronicCrossSection::logTiming(entry,fast_entry,timing);
   return matCrossSection;
 }
+
+
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo.....
 

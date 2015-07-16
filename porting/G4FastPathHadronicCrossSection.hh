@@ -8,6 +8,10 @@
 #include <utility>
 #include <unordered_map>
 
+class G4DynamicParticle;
+class G4Material;
+class G4CrossSectionDataStore;
+
 #define FPDEBUG
 //TODO: Move all logging and debug functionality to separate header
 namespace G4FastPathHadronicCrossSection {
@@ -20,12 +24,15 @@ namespace G4FastPathHadronicCrossSection {
 	struct fastPathEntry{
 		fastPathEntry();
 		~fastPathEntry();
+		void Initialize(G4CrossSectionDataStore* );
+		//Sample cross-section from input G4CrossSectionDataStore for the input dynamic particle
+		//TODO: Remove this function and rely on G4CrossSectionDataStore::GetCrossSection slow-path
+		G4double SampleCrossSectionValue(G4CrossSectionDataStore*, const G4DynamicParticle*);
 		G4ParticleDefinition *particle;
 		G4Material *material;
 		G4double min_cutoff;
 
 		XSParam *physicsVector;
-
 #       ifdef FPDEBUG
 		//stats for debug
 		G4int count;
@@ -109,6 +116,24 @@ namespace G4FastPathHadronicCrossSection {
 		G4bool initializationPhase;
 		controlFlag() : prevCalcUsedFastPath(false),useFastPathIfAvailable(false),initializationPhase(false) {}
 	};
+	//Parameters to control sampling
+	struct fastPathParameters {
+		fastPathParameters() {
+			//default
+			//TODO: are these ok?
+			  queryMax = 10000;
+			  sampleMin = 0.0001;
+			  sampleMax = 10000;
+			  sampleCount = 200000;
+			  dpTol = 0.01;
+		}
+	  //PRUTH vars for sampling and surragate model
+	  G4double queryMax;
+	  G4double sampleMin;
+	  G4double sampleMax;
+	  G4int sampleCount;
+	  G4double dpTol;
+	};
 
 	//Logging functionalities, disabled if not in FPDEBUG mode
 	static inline void logInvocationTriedOneLine( cycleCountEntry* );
@@ -121,8 +146,10 @@ namespace G4FastPathHadronicCrossSection {
 	static inline void logInitCyclesFastPath( cycleCountEntry* , timing& );
 	static inline void logTotalCyclesFastPath( cycleCountEntry* , timing& );
 	static inline void logTotalCyclesSlowPath( cycleCountEntry* , timing& );
+	static inline void logTiming( cycleCountEntry* , fastPathEntry* , timing& );
 }
 
+//Implementation of inline functions. Note the ifdef
 
 namespace G4FastPathHadronicCrossSection {
 
@@ -157,6 +184,24 @@ inline void logTotalCyclesSlowPath( cycleCountEntry* cl,timing& tm)
 {
 	if ( cl!=nullptr ) cl->totalCyclesSlowPath = tm.rdtsc_stop - tm.rdtsc_start;
 }
+inline void logTiming( cycleCountEntry* entry , fastPathEntry* fast_entry, timing& timing)
+{
+	if (fast_entry != nullptr ) {
+		if ( entry->invocationCountFastPath == 0 ) {
+			//PRUTH style initialization
+			G4FastPathHadronicCrossSection::logInitCyclesFastPath(entry,timing);
+			G4FastPathHadronicCrossSection::logInvocationCountFastPath(entry);
+		  } else {
+			//PRUTH comment to understand:
+			//the first one includes the initialization... don't count it for now
+			G4FastPathHadronicCrossSection::logTotalCyclesFastPath(entry,timing);
+			G4FastPathHadronicCrossSection::logInvocationCountFastPath(entry);
+		  }
+	  	 } else {
+	  	   G4FastPathHadronicCrossSection::logInvocationCountSlowPAth(entry);
+	  	   G4FastPathHadronicCrossSection::logTotalCyclesSlowPath(entry,timing);
+	  	 }
+}
 #else
 inline void logInvocationTriedOneLine(cycleCountEntry*){}
 inline void logInvocationOneLine( cycleCountEntry*){}
@@ -166,6 +211,7 @@ inline void logInvocationCountSlowPAth( cycleCountEntry*){}
 inline void logInitCyclesFastPath( cycleCountEntry* , timing& ){}
 inline void logTotalCyclesFastPath( cycleCountEntry* , timing& ){}
 inline void logTotalCyclesSlowPath( cycleCountEntry* , timing& ){}
+inline void logTiming( cycleCountEntry* , fastPathEntry* , timing& ) {}
 #endif
 
 inline void getCrossSectionCount::MethodCalled() {

@@ -51,6 +51,7 @@
 #include "G4DynamicParticle.hh"
 #include "G4PhysicsVector.hh"
 #include <vector>
+#include <iostream>
 
 class G4Nucleus;
 class G4ParticleDefinition;
@@ -134,8 +135,8 @@ public:
   GetFastPathParameters() const { return fastPathParams; }
   inline const G4FastPathHadronicCrossSection::controlFlag&
   GetFastPathControlFlags() const { return fastPathFlags; }
+  void DumpFastPath( const G4ParticleDefinition* , const G4Material* , std::ostream& os);
 private:
-  G4double GetCrossSection(const G4DynamicParticle*, const G4Material*,G4bool requiresSlowPath);
   G4FastPathHadronicCrossSection::controlFlag fastPathFlags;
   G4FastPathHadronicCrossSection::fastPathParameters fastPathParams;
   //Counters
@@ -143,7 +144,6 @@ private:
   //TODO: share this among threads
   G4FastPathHadronicCrossSection::G4CrossSectionDataStore_Cache fastPathCache;
   G4FastPathHadronicCrossSection::timing timing;
-  inline G4double GetCrossSectionFastPath(const G4FastPathHadronicCrossSection::fastPathEntry*, const G4DynamicParticle*);
 };
 
 inline void G4CrossSectionDataStore::AddDataSet(G4VCrossSectionDataSet* p)
@@ -157,13 +157,4 @@ inline void G4CrossSectionDataStore::SetVerboseLevel(G4int value)
   verboseLevel = value;
 }
 
-inline G4double
-G4CrossSectionDataStore::GetCrossSectionFastPath(const G4FastPathHadronicCrossSection::fastPathEntry* fast_entry,
-												 const G4DynamicParticle* part)
-{
-	//TODO: In PRUTH initial implementation here there is the initialization of
-	//      the fastPathPV... Do we need that?
-	assert( fast_entry != nullptr && part != nullptr );
-	return fast_entry->physicsVector->Value(part->GetKineticEnergy());
-}
 #endif

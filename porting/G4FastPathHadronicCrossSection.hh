@@ -7,6 +7,7 @@
 #include <functional>
 #include <utility>
 #include <unordered_map>
+#include <iostream>
 
 class G4DynamicParticle;
 class G4Material;
@@ -24,6 +25,7 @@ namespace G4FastPathHadronicCrossSection {
 	struct fastPathEntry{
 		fastPathEntry();
 		~fastPathEntry();
+		inline G4double GetCrossSection(G4double ene) const { return physicsVector->Value(ene); }
 		void Initialize(G4CrossSectionDataStore* );
 		//Sample cross-section from input G4CrossSectionDataStore for the input dynamic particle
 		//TODO: Remove this function and rely on G4CrossSectionDataStore::GetCrossSection slow-path
@@ -111,10 +113,11 @@ namespace G4FastPathHadronicCrossSection {
 
 	//Configure the caching mechanism
 	struct controlFlag {
+		G4bool requiresSlowPath;
 		G4bool prevCalcUsedFastPath;
 		G4bool useFastPathIfAvailable;
 		G4bool initializationPhase;
-		controlFlag() : prevCalcUsedFastPath(false),useFastPathIfAvailable(false),initializationPhase(false) {}
+		controlFlag() : requiresSlowPath(false),prevCalcUsedFastPath(false),useFastPathIfAvailable(false),initializationPhase(false) {}
 	};
 	//Parameters to control sampling
 	struct fastPathParameters {
@@ -148,6 +151,8 @@ namespace G4FastPathHadronicCrossSection {
 	static inline void logTotalCyclesSlowPath( cycleCountEntry* , timing& );
 	static inline void logTiming( cycleCountEntry* , fastPathEntry* , timing& );
 }
+
+inline std::ostream& operator<<(std::ostream& os, const G4FastPathHadronicCrossSection::fastPathEntry& fp);
 
 //Implementation of inline functions. Note the ifdef
 
@@ -243,6 +248,19 @@ inline void getCrossSectionCount::SampleZandA() {
 	++sampleZandA;
 #endif
 }
+}//namespace
+
+inline std::ostream& operator<<(std::ostream& os, const G4FastPathHadronicCrossSection::fastPathEntry& fp) {
+	using CLHEP::MeV;
+	os<<"#Particle: "<<(fp.particle!=nullptr?fp.particle->GetParticleName():"UNDEFINED")<<"\n";
+	os<<"#Material: "<<(fp.material!=nullptr?fp.material->GetName():"UNDEFINED")<<"\n";
+	os<<"#min_cutoff(MeV): "<<fp.min_cutoff/MeV<<"\n";
+#ifdef FPDEBUG
+	os<<"#DEBUG COUNTERS: count="<<fp.count<<" slowpath_sum="<<fp.slowpath_sum<<" max_delta="<<fp.max_delta;
+	os<<" min_delta="<<fp.min_delta<<" sum_delta="<<fp.sum_delta<<" sum_delta_square="<<fp.sum_delta_square<<"\n";
+#endif
+	os<<*(fp.physicsVector)<<"\n";
+	return os;
 }
 
 #endif //G4FastPathHadronicCrossSection_hh

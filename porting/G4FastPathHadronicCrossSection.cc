@@ -33,10 +33,9 @@ namespace {
 			std::vector <Point_t> &);
 }
 
-fastPathEntry::fastPathEntry() :
-	particle(nullptr),material(nullptr),min_cutoff(-1.),
-	physicsVector(nullptr)
-{
+fastPathEntry::fastPathEntry(const G4ParticleDefinition* part, const G4Material* mat, G4double min) :
+		particle(part),material(mat),min_cutoff(min),physicsVector(nullptr)
+	{
 	DBG("Initializing a fastPathEntry");
 #ifdef FPDEBUG
 	count = 0;
@@ -58,11 +57,11 @@ fastPathEntry::~fastPathEntry()
 	delete physicsVector;
 }
 
-namespace {
-	static inline G4double exp10(G4double x) {
-		return std::exp( M_LN10*x);
-	}
-}
+//namespace {
+//	static inline G4double exp10(G4double x) {
+//		return std::exp( M_LN10*x);
+//	}
+//}
 
 void fastPathEntry::Initialize(G4CrossSectionDataStore* xsds)
 {
@@ -103,64 +102,41 @@ void fastPathEntry::Initialize(G4CrossSectionDataStore* xsds)
 	//add the cutoff energy
 	probingParticle->SetKineticEnergy(min_cutoff);
 	//Sample cross-section
-	xs = SampleCrossSectionValue(xsds,probingParticle);
-	data_in.push_back({params.queryMax,xs});//TODO: Why max_query? should it be cutoff?
+	xs = xsds->GetCrossSection(probingParticle,material);
+	data_in.push_back({min_cutoff,xs});
 
 	G4double currEnergy = 0.0;
 	//log results
+	auto exp10 = [](G4double x){ return std::exp( M_LN10*x); };
 	for(G4double log_currEnergy = log_min; log_currEnergy < log_max; log_currEnergy += log_step){
 		currEnergy = exp10(log_currEnergy) - shift;
-	    	if (currEnergy <  min_cutoff) continue;
-	    	probingParticle->SetKineticEnergy(currEnergy);
-	    	xs = SampleCrossSectionValue(xsds,probingParticle);
+		if (currEnergy <  min_cutoff) continue;
+		probingParticle->SetKineticEnergy(currEnergy);
+		xs=xsds->GetCrossSection(probingParticle,material);
 	    //G4cout << "PRUTH: energy value " << currEnergy << ", XS value " << xs << G4endl;
 	    if (xs > max_xs) max_xs = xs;
 	    data_in.push_back({currEnergy,xs});
-	  } // --- end of loop i
-	  probingParticle->SetKineticEnergy(max-shift);
-	  xs = SampleCrossSectionValue(xsds,probingParticle);
-	  data_in.push_back({max-shift,xs});
+	} // --- end of loop i
+	probingParticle->SetKineticEnergy(max-shift);
+	xs = xsds->GetCrossSection(probingParticle,material);
+	data_in.push_back({max-shift,xs});
 
-	  G4double tol = max_xs * 0.01;
-	  std::vector<Point_t> decimated_data;
-	  simplify_function(tol,  data_in,  decimated_data);
-	  std::vector<Point_t> debiased_data;
-	  RemoveBias( data_in,  decimated_data,  debiased_data);
-	  if ( physicsVector != nullptr ) delete physicsVector;
-	  physicsVector = new XSParam(decimated_data.size());
-	  G4int physicsVectorIndex = 0;
-	  for(size_t i = 0; i < decimated_data.size(); i++){
-	    physicsVector->PutValue(physicsVectorIndex++, decimated_data[i].e, decimated_data[i].xs);
-	  }
+	G4double tol = max_xs * 0.01;
+	std::vector<Point_t> decimated_data;
+	simplify_function(tol,  data_in,  decimated_data);
+	std::vector<Point_t> debiased_data;
+	RemoveBias( data_in,  decimated_data,  debiased_data);
+	if ( physicsVector != nullptr ) delete physicsVector;
+	physicsVector = new XSParam(decimated_data.size());
+	G4int physicsVectorIndex = 0;
+	for(size_t i = 0; i < decimated_data.size(); i++){
+		physicsVector->PutValue(physicsVectorIndex++, decimated_data[i].e, decimated_data[i].xs);
+	}
+	//xsds->DumpFastPath(particle,material,G4cout);
 }
 
-G4double fastPathEntry::SampleCrossSectionValue(
-		G4CrossSectionDataStore* xsds,
-		const G4DynamicParticle* probingParticle)
-{
-	  //Original Geant4 Algorithm: START
-	  //TODO: The best thing to do is to call G4CrossSectionDataStore::GetCrossSection
-	  //      forcing the slow path. In this way we avoid this code duplication
-	  const G4int nElements = material->GetNumberOfElements();
-	  const G4double* nAtomsPerVolume = material->GetVecNbOfAtomsPerVolume();
-
-	  //if(G4int(xsecelm.size()) < nElements) {
-	  //  xsecelm.resize(nElements);
-	  //}
-	  const G4Material* mat = material;
-	  G4double acc = 0.0;
-	  for(G4int i=0; i < nElements; ++i) {
-	    const G4double ret_value = xsds->GetCrossSection(probingParticle, (*mat->GetElementVector())[i] , mat);
-
-	    acc += nAtomsPerVolume[i] * ret_value;
-	    //xsecelm[i] = acc;
-	  }
-	  //ORIGNAL Geant4 ALGORITHM: STOP
-
-	  return acc;
-}
-cycleCountEntry::cycleCountEntry() :
-		particle(""),material(nullptr),dataset(""),fastPath(nullptr),
+cycleCountEntry::cycleCountEntry(const G4String& pname , const G4Material* mat) :
+		particle(pname),material(mat),fastPath(nullptr),
 		energy(-1.),crossSection(-1.)
 {
 	DBG("Initializing cache entry");
@@ -179,7 +155,7 @@ cycleCountEntry::cycleCountEntry() :
 cycleCountEntry::~cycleCountEntry()
 {
 	DBG("Deleting cache entry");
-	DBG(particle<<" "<<material<<" ("<<(material?material->GetName():"MAT_NONE")<<") "<<dataset<<" "\
+	DBG(particle<<" "<<material<<" ("<<(material?material->GetName():"MAT_NONE")<<") "<<" "\
 			<<"fast path pointer:"<<fastPath<<" stored:"<<energy<<" "<<crossSection<<" "\
 			<<cacheHitCount<<" "<<initCyclesFastPath<<" "<<invocationCountSlowPath<<" "\
 			<<totalCyclesSlowPath<<" "<<invocationCountFastPath<<" "<<totalCyclesFastPath<<" "\

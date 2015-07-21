@@ -55,12 +55,14 @@
 #include "G4Element.hh"
 #include "G4Material.hh"
 #include "G4NistManager.hh"
+#include <algorithm>
 
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo.....
 
 G4CrossSectionDataStore::G4CrossSectionDataStore() :
-  nDataSetList(0), verboseLevel(0)
+  nDataSetList(0), verboseLevel(0),fastPathFlags(),fastPathParams(),
+  counters(),fastPathCache()
 {
   nist = G4NistManager::Instance();
   currentMaterial = elmMaterial = 0;
@@ -78,24 +80,62 @@ G4CrossSectionDataStore::~G4CrossSectionDataStore()
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo.....
 G4double
 G4CrossSectionDataStore::GetCrossSection(const G4DynamicParticle* part,
-                                         const G4Material* mat )
+                                         const G4Material* mat , G4bool requiresSlowPath)
 {
-	//Reminder:
+	//The fast-path algorithm
+	//   requiresSlowPath == true => Use slow path independently of other conditions
+	//A. Dotti: modifications to this algorithm following the studies of P. Ruth and R. Fowler
+	//          on speeding up the cross-sections calculations. Their algorithm is called in the
+	// 	        following "fast-path" while the normal approach to calcualte cross-section is
+	//          referred to as "slow-path".
+	//Some details on the fast-path algorithm:
+	//The idea is to use a cached approximation of the material cross-section.
+	//Starting points:
+	//1- We need the material cross-section for navigation purposes: e.g. to calculate the PIL.
+	//2- If this interaction occurs at the end of a step we need to select the G4Element on which
+	//   nucleus the interaction is actually happening. This is done calculating the element cross-section
+	//   throwing a random number and selecting the appropriate nucleus (see SampleZandA function)
+	//3- To calculate the material cross section needed for 1- we use the G4Element cross sections.
+	//   Since the material cross-section is simply the weighted sum of the element cross-sections.
+	//4- The slow path algorithm here accomplishes two use cases (not very good design IMHO): it
+	//   calculates the material cross-section and it updates the xsecelem array that contains the
+	//   relative cross-sections used by SampleZandA to select the element on which the interaction
+	//   occurs.
+	//The idea of the fast-path algorithm is to replace the request for 1- with a faster calculation
+	//of the material cross-section from an approximation contained in cache.
+	//There two complications to take into account:
+	//A- If I use a fast parametrization for material cross-section, I still need to do the full
+	//   calculations if an interaction occurs, because I need to calculate the element cross-sections.
+	//   Since the function that updates xsecelem is the same (this one) I need to be sure that
+	//   if I call this method for SampleAandZ the xsecelem is updated.
+	//B- It exists the possibility to be even fast the the fast-path algorithm: this happens when
+	//   to select the element of the interaction via SampleZandI I call again this method exactly
+	//   with the same conditions as when I called this method to calculate the material cross-section.
+	//   In such a case xsecelem is updated and we do not need to do much more. This happens when
+	//   for example a neutron undergoes an interaction at the end of the step.
+	//Dealing with B- complicates a bit the algorithm.
+	//In summary:
+	// If no fast-path algo is available (or user does not want that), go with the old plain algorithm
+	// If a fast-path algo is avilable, use it whenever possible.
+	//
+	// In general we expect user to selectively decide for which processes, materials and particle combinations
+	// we want to use the fast-path. If this is activated we also expect that the cross-section fast-path
+	// cache is created during the run initialization via calls to this method.
+	//
 	//fastPathFlags contains control flags for the fast-path algorithm:
-	//             .requiresSlowPath == true => Use slow path always
 	// 	           .prevCalcUsedFastPath == true => Previous call to GetCrossSection used the fast-path
 	//												it is used in the decision to assess if xsecelem is
 	//												correctly set-up
 	//			   .useFastPathIfAvailable == true => User requested the use of fast-path algorithm
 	//			   .initializationPhase == true => If true we are in Geant4 Init phase before the event-loop
-	//											   used in the decision to build the fast-path table
-	//Starting from a fresh call, in general we want to use, if possible fast-path algorithm
-	fastPathFlags.requiresSlowPath = false;
-	//Check user-request, does he want fast-path?
-	//if so, are we in initialization phase?
+
+	//Check user-request, does he want fast-path? if not
+	// OR
+	// we want fast-path and we are in initialization phase?
 	if ( !fastPathFlags.useFastPathIfAvailable
 		||	(fastPathFlags.useFastPathIfAvailable&&fastPathFlags.initializationPhase) ) {
-		fastPathFlags.requiresSlowPath=true;
+		//Traditional algorithm is requested
+		requiresSlowPath=true;
 	}
 
 	//Logging for performance calculations and counter, active only in FPDEBUG mode
@@ -105,7 +145,7 @@ G4CrossSectionDataStore::GetCrossSection(const G4DynamicParticle* part,
 
 	//This is the cache entry of the fast-path cross-section parametrization
 	G4FastPathHadronicCrossSection::cycleCountEntry* entry = nullptr;
-	//Did user requrest fast-path in first place and are we not in the initialization phase
+	//Did user request fast-path in first place and are we not in the initialization phase
 	if ( fastPathFlags.useFastPathIfAvailable && !fastPathFlags.initializationPhase ) {
 		//Important: if it is in initialization phase we should NOT use fast path: we are going to build it
 		//G4FastPathHadronicCrossSection::G4CrossSectionDataStore_Key searchkey = {part->GetParticleDefinition(),mat};
@@ -114,35 +154,42 @@ G4CrossSectionDataStore::GetCrossSection(const G4DynamicParticle* part,
 	assert( fastPathFlags.initializationPhase && entry == nullptr );
 	assert( fastPathFlags.useFastPathIfAvailable && entry == nullptr );
 
-  //Super fast check: are we calling again this method for exactly the same interaction?
+  //Super-fast-path: are we calling again this method for exactly the same conditions
+  //of the triplet {particle,material,energy}?
   if(mat == currentMaterial && part->GetDefinition() == matParticle
      && part->GetKineticEnergy() == matKinEnergy) 
     {
 	  G4FastPathHadronicCrossSection::logInvocationTriedOneLine(entry);
-	  //Check that the previous time we called this method we used the slow
-	  //path: we need the data-member xsecelem to be the one for the current
-	  //interaction, this is ensured only if: we will do the slow path right now or we
-	  //did it exactly for the same conditions the last call.
-	  if ( !fastPathFlags.prevCalcUsedFastPath && !fastPathFlags.requiresSlowPath ) {
-		  counters.HitOneLine();
-		  G4FastPathHadronicCrossSection::logInvocationOneLine(entry);
-		  //Good everything is setup correctly, exit!
+	  //If there is no user-request for the fast-path in first place?
+	  //It means we built the xsecelem for sure, let's return immediately
+	  if ( !fastPathFlags.useFastPathIfAvailable ) {
 		  return matCrossSection;
 	  } else {
-		  fastPathFlags.requiresSlowPath = true;
+		  //Check that the last time we called this method we used the slow
+		  //path: we need the data-member xsecelem to be setup correctly for the current
+		  //interaction. This is ensured only if: we will do the slow path right now or we
+		  //did it exactly for the same conditions of the last call.
+		  if ( !fastPathFlags.prevCalcUsedFastPath && ! requiresSlowPath ) {
+			  counters.HitOneLine();
+			  G4FastPathHadronicCrossSection::logInvocationOneLine(entry);
+			  //Good everything is setup correctly, exit!
+			  return matCrossSection;
+		  } else {
+			  //We need to follow the slow-path because
+			  //xsecelem is not calculated correctly
+			  requiresSlowPath = true;
+		  }
 	  }
     }
   
   //Ok, now check if we have cached for this {particle,material,energy} the cross-section
-  //in this case we did, let's return immediately, if we are not forced to take the slow path
+  //in this case let's return immediately, if we are not forced to take the slow path
   //(e.g. as before if the xsecelem is not up-to-date we need to take the slow-path).
-  //Note that this is not equivalent to the previous ultra-fast check: we now have a map that
-  //we are using.
-  //TODO: I think the previous if is contained in this case, so we could merge the
-  //      two ifs. The previous one is the algorithm in G4Ver<10.2
+  //Note that this is not equivalent to the previous ultra-fast check: we now have a map here
+  //So we can have for example a different particle.
   if ( entry != nullptr && entry->energy == part->GetKineticEnergy() ) {
 	  G4FastPathHadronicCrossSection::logHit(entry);
-	  if ( !fastPathFlags.requiresSlowPath ) {
+	  if ( !requiresSlowPath ) {
 		  return entry->crossSection;
 	  }
   }
@@ -154,20 +201,21 @@ G4CrossSectionDataStore::GetCrossSection(const G4DynamicParticle* part,
 
   //Now check if the cache entry has a fast-path cross-section calculation available
   G4FastPathHadronicCrossSection::fastPathEntry* fast_entry = nullptr;
-  if ( entry != nullptr && !fastPathFlags.requiresSlowPath ) {
+  if ( entry != nullptr && ! requiresSlowPath ) {
 	  fast_entry = entry->fastPath;
+	  assert(fast_entry!=nullptr && !fastPathFlags.initializationPhase);
   }
 
   //Each fast-path cross-section has a minimum value of validity, if energy is below
-  //that skip
+  //that skip fast-path algorithm
   if ( fast_entry != nullptr && part->GetKineticEnergy() < fast_entry->min_cutoff )
   {
-	  assert(fastPathFlags.requiresSlowPath==false);
-	  fastPathFlags.requiresSlowPath = true;
+	  assert(requiresSlowPath==false);
+	  requiresSlowPath = true;
   }
 
   //Ready to use the fast-path calculation
-  if ( !fastPathFlags.requiresSlowPath && fast_entry != nullptr ) {
+  if ( !requiresSlowPath && fast_entry != nullptr ) {
 	  counters.FastPath();
 	  //Retrieve cross-section from fast-path cache
 	  matCrossSection = fast_entry->GetCrossSection(part->GetKineticEnergy());
@@ -191,21 +239,6 @@ G4CrossSectionDataStore::GetCrossSection(const G4DynamicParticle* part,
   }
   //Stop measurement of cpu cycles
   G4FastPathHadronicCrossSection::logStopCountCycles(timing);
-
-  //We are in initialization phase, we want to use the fast-path
-  if ( fastPathFlags.useFastPathIfAvailable && fastPathFlags.initializationPhase ) {
-	  //Check if this particular {particle,material} combination has never been seen before
-	  G4FastPathHadronicCrossSection::G4CrossSectionDataStore_Key searchkey = {part->GetParticleDefinition(),mat};
-	  entry = fastPathCache[searchkey];
-	  if (entry == nullptr){
-		  //add entry
-		  entry = new G4FastPathHadronicCrossSection::cycleCountEntry();
-		  entry->particle = matParticle->GetParticleName(); //TODO: needed?
-		  entry->material = mat; //TODO: needed?
-		  entry->dataset = dataSetList[nDataSetList-1]->GetName();//TODO: needed?
-		  fastPathCache[searchkey] = entry;
-	  }
-  }
 
   if ( entry != nullptr ) {
 	  entry->energy = part->GetKineticEnergy();
@@ -368,12 +401,13 @@ G4CrossSectionDataStore::SampleZandA(const G4DynamicParticle* part,
                                      const G4Material* mat,
 				     G4Nucleus& target)
 {
+  counters.SampleZandA();
+
   G4int nElements = mat->GetNumberOfElements();
   const G4ElementVector* theElementVector = mat->GetElementVector();
   G4Element* anElement = (*theElementVector)[0];
 
-  G4double cross = GetCrossSection(part, mat);
-
+  G4double cross = GetCrossSection(part, mat , true);
   // select element from a compound 
   if(1 < nElements) {
     cross *= G4UniformRand();
@@ -475,6 +509,40 @@ G4CrossSectionDataStore::BuildPhysicsTable(const G4ParticleDefinition& aParticle
   for (G4int i=0; i<nDataSetList; ++i) {
     dataSetList[i]->BuildPhysicsTable(aParticleType);
   } 
+  //A.Dotti: if fast-path has been requested we can now create the surrogate
+  //         model for fast path.
+  if ( fastPathFlags.useFastPathIfAvailable ) {
+	  fastPathFlags.initializationPhase = true;
+	  using my_value_type=G4FastPathHadronicCrossSection::G4CrossSectionDataStore_Requests::value_type;
+	  //Loop on all requests, if particle matches create the corresponding fsat-path
+	  std::for_each( requests.begin() , requests.end() ,
+			  [&aParticleType,this](const my_value_type& req) {
+  	  	  	  	  if ( aParticleType == *req.part_mat.first ) {
+  	  	  	  		  G4FastPathHadronicCrossSection::cycleCountEntry* entry =
+  	  	  	  				  new G4FastPathHadronicCrossSection::cycleCountEntry(aParticleType.GetParticleName(),req.part_mat.second);
+  	  	  	  		  entry->fastPath =
+  	  	  	  				  new G4FastPathHadronicCrossSection::fastPathEntry(&aParticleType,req.part_mat.second,req.min_cutoff);
+  	  	  	  		  entry->fastPath->Initialize(this);
+  	  	  	  		  fastPathCache[req.part_mat] = entry;
+  	  	  	  	  }
+	  	  	  }
+	  	  );
+	  fastPathFlags.initializationPhase = false;
+  }
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo.....
+
+void G4CrossSectionDataStore::ActivateFastPath( const G4ParticleDefinition* pdef, const G4Material* mat, G4double min_cutoff)
+{
+	assert(pdef!=nullptr&&mat!=nullptr);
+	G4FastPathHadronicCrossSection::G4CrossSectionDataStore_Key key={pdef,mat};
+	if ( requests.insert( { key , min_cutoff } ).second ) {
+		std::ostringstream msg;
+		msg<<"Attempting to request FastPath for couple: "<<pdef->GetParticleName()<<","<<mat->GetName();
+		msg<<" but combination already exists";
+		G4HadronicException(__FILE__,__LINE__,msg.str());
+	}
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo.....
@@ -537,6 +605,8 @@ void G4CrossSectionDataStore::DumpHtml(const G4ParticleDefinition& /* pD */,
   }
 }
 
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo.....
+
 void G4CrossSectionDataStore::PrintCrossSectionHtml(const G4VCrossSectionDataSet *cs) const
 {
    G4String dirName(getenv("G4PhysListDocDir"));
@@ -559,7 +629,7 @@ void G4CrossSectionDataStore::PrintCrossSectionHtml(const G4VCrossSectionDataSet
 
 }
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo.....
-//private 
+
 G4String G4CrossSectionDataStore::HtmlFileName(const G4String & in) const
 {
    G4String str(in);

@@ -8,6 +8,7 @@
 #include <utility>
 #include <unordered_map>
 #include <iostream>
+#include <set>
 
 class G4DynamicParticle;
 class G4Material;
@@ -23,16 +24,14 @@ namespace G4FastPathHadronicCrossSection {
 	using G4CrossSectionDataStore_Key=std::pair<const G4ParticleDefinition*,const G4Material*>;
 	//This represents the fast XS implementation.
 	struct fastPathEntry{
-		fastPathEntry();
+		//fastPathEntry();
+		fastPathEntry(const G4ParticleDefinition *par,const G4Material* mat,G4double min_cutoff);
 		~fastPathEntry();
 		inline G4double GetCrossSection(G4double ene) const { return physicsVector->Value(ene); }
 		void Initialize(G4CrossSectionDataStore* );
-		//Sample cross-section from input G4CrossSectionDataStore for the input dynamic particle
-		//TODO: Remove this function and rely on G4CrossSectionDataStore::GetCrossSection slow-path
-		G4double SampleCrossSectionValue(G4CrossSectionDataStore*, const G4DynamicParticle*);
-		G4ParticleDefinition *particle;
-		G4Material *material;
-		G4double min_cutoff;
+		const G4ParticleDefinition * const particle;
+		const G4Material * const material;
+		const G4double min_cutoff;
 
 		XSParam *physicsVector;
 #       ifdef FPDEBUG
@@ -48,11 +47,10 @@ namespace G4FastPathHadronicCrossSection {
 
 	//A cache entry.
 	struct cycleCountEntry{
-		cycleCountEntry();
+		cycleCountEntry(const G4String& pname , const G4Material* mat);
 		~cycleCountEntry();
-		G4String particle;
-		const G4Material* material;
-		G4String dataset;
+		const G4String& particle;
+		const G4Material * const material;
 
 		//optional fastPathEntry
 		fastPathEntry* fastPath;
@@ -97,7 +95,7 @@ namespace G4FastPathHadronicCrossSection {
 	struct G4CrossSectionDataStore_Key_Hash {
 		std::hash<uint64_t> hash_uint64_t;
 		inline size_t operator()(const G4CrossSectionDataStore_Key& x) const throw() {
-			return hash_uint64_t(hash_uint64_t( ((uint64_t)(x.first)) ) +  hash_uint64_t(   ((uint64_t)(x.second))));
+			return hash_uint64_t(hash_uint64_t( ((uint64_t)(x.first)) ) +  hash_uint64_t(((uint64_t)(x.second))));
 		}
 	};
 	//Equality for two key elements
@@ -107,17 +105,29 @@ namespace G4FastPathHadronicCrossSection {
 			return (lhs.first==rhs.first)&&(*lhs.second == *rhs.second);
 		}
 	};
+//	The cache itself
+	using G4CrossSectionDataStore_Cache=std::unordered_map<G4CrossSectionDataStore_Key,cycleCountEntry*,
+			G4CrossSectionDataStore_Key_Hash,G4CrossSectionDataStore_Key_EqualTo>;
 
-	//The cache itself
-	using G4CrossSectionDataStore_Cache=std::unordered_map<G4CrossSectionDataStore_Key,cycleCountEntry*,G4CrossSectionDataStore_Key_Hash,G4CrossSectionDataStore_Key_EqualTo>;
+	struct fastPathRequestConfig_t {
+		G4CrossSectionDataStore_Key part_mat;
+		G4double min_cutoff;
+	};
+	//Two of the elements are identical if the part_mat part is
+	struct fastPathRequestConfig_Less {
+		std::less<G4CrossSectionDataStore_Key> less;
+		inline bool operator()(const fastPathRequestConfig_t& lhs,const fastPathRequestConfig_t& rhs ) const {
+			return less(lhs.part_mat,rhs.part_mat);
+		}
+	};
+	using G4CrossSectionDataStore_Requests=std::set<fastPathRequestConfig_t,fastPathRequestConfig_Less>;
 
 	//Configure the caching mechanism
 	struct controlFlag {
-		G4bool requiresSlowPath;
 		G4bool prevCalcUsedFastPath;
 		G4bool useFastPathIfAvailable;
 		G4bool initializationPhase;
-		controlFlag() : requiresSlowPath(false),prevCalcUsedFastPath(false),useFastPathIfAvailable(false),initializationPhase(false) {}
+		controlFlag() : prevCalcUsedFastPath(false),useFastPathIfAvailable(false),initializationPhase(false) {}
 	};
 	//Parameters to control sampling
 	struct fastPathParameters {

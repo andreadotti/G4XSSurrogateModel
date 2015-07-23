@@ -151,8 +151,6 @@ G4CrossSectionDataStore::GetCrossSection(const G4DynamicParticle* part,
 		//G4FastPathHadronicCrossSection::G4CrossSectionDataStore_Key searchkey = {part->GetParticleDefinition(),mat};
 		entry = fastPathCache[{part->GetParticleDefinition(),mat}];
 	}
-	assert( fastPathFlags.initializationPhase && entry == nullptr );
-	assert( fastPathFlags.useFastPathIfAvailable && entry == nullptr );
 
   //Super-fast-path: are we calling again this method for exactly the same conditions
   //of the triplet {particle,material,energy}?
